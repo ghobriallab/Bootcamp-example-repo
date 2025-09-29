@@ -1,0 +1,45 @@
+---
+title: "Label transfer"
+author: "Kane Foster"
+date: "Date: `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+    highlight: tango
+---
+
+# FLEX scRNA pilot
+
+## Label transfer data prep
+
+
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(scran))
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(scuttle))
+suppressPackageStartupMessages(library(scater))
+suppressPackageStartupMessages(library(stringr))
+multicore=MulticoreParam(workers=16)
+```
+
+**Bandyopadhyay et al. 2024**, [GSE253355](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE253355).
+
+```{r}
+srt = readRDS('../data/Bandyo/GSE253355_Normal_Bone_Marrow_Atlas_Seurat_SB_v2.rds')
+sce = as.SingleCellExperiment(srt)
+sce
+zellkonverter::writeH5AD(sce,file='../data/Bandyo/GSE253355_Normal_Bone_Marrow_Atlas_Seurat_SB_v2.h5ad')
+```
+
+
+# Session Info:
+
+```{r}
+sessionInfo()
+```
+
+

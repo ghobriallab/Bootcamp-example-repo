@@ -1,0 +1,210 @@
+---
+title: "scds"
+author: "Kane Foster"
+date: "Date: `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+    highlight: tango
+---
+
+# FLEX scRNA pilot
+## Doublet identification - scds
+
+I received the pre-processed data, now I am going to run the doublet identification pipeline. Third tool:
+
+scds:
+
+```{r load_data, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(scran))
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(scuttle))
+suppressPackageStartupMessages(library(scater))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(bluster))
+suppressPackageStartupMessages(library(scds))
+suppressPackageStartupMessages(library(BiocParallel))
+multicore=MulticoreParam(workers=16)
+```
+
+
+Define functions to run scds
+
+```{r}
+
+list_files <- function(input_dir){
+    samples <- list.files(input_dir)
+    return(samples)
+    }
+
+create_out_dir <- function(out_dir, sample_name){
+    output_dir <- paste0(out_dir,sample_name,"/SCDS/")
+    dir.create(output_dir,recursive = T)
+    return(output_dir)
+    }
+
+load_sample <- function(file_path){
+    dat = Seurat::Read10X_h5(paste0(file_path,'/sample_filtered_feature_bc_matrix.h5'))
+    dat = Seurat::CreateSeuratObject(dat, min.cells = 1, min.features = 1)
+    ## NOTE TO NORMALIZE WITH SCUTTLE I HAVE TO REMOVE ZERO COUNT CELLS!!!!
+    ## gac
+    sce = as.SingleCellExperiment(dat)
+    return(sce)
+    }
+
+pre_process_sample <- function(sce){
+    sce <- logNormCounts(sce, BPPARAM=multicore)
+    dec <- modelGeneVar(sce, BPPARAM=multicore)
+    hvgs <- getTopHVGs(dec, n=2000)
+    set.seed(12345)
+    sce <- runPCA(sce, ncomponents=10, subset_row=hvgs, BPPARAM=multicore)
+    sce <- runTSNE(sce, dimred="PCA", BPPARAM=multicore)
+    return(sce)
+    }
+
+run_scds <- function(sce){
+  sce <- cxds_bcds_hybrid(sce)
+  scds_res <- data.frame(cbind(colnames(sce),sce$cxds_score, sce$bcds_score, sce$hybrid_score))
+  colnames(scds_res) <- c("Cell","cxds_score","bcds_score","hybrid_score")
+  scds_res <- scds_res[match(colnames(sce),scds_res$Cell),]
+  return(scds_res)
+}
+
+plot_doublets <- function(sce,scds_res){
+    p1=plotTSNE(sce, colour_by=I(as.numeric(scds_res$cxds_score))) + ggtitle("SCDS cxds score") + theme(plot.title = element_text(hjust = 0.5))
+    p2=plotTSNE(sce, colour_by=I(as.numeric(scds_res$bcds_score))) + ggtitle('SCDS bcds score') + theme(plot.title = element_text(hjust = 0.5))
+    p3=plotTSNE(sce, colour_by=I(as.numeric(scds_res$hybrid_score))) + ggtitle('SCDS hybrid score') + theme(plot.title = element_text(hjust = 0.5))
+    output=list(p1,p2,p3)
+    return(output)
+    }
+
+save_results <- function(scds_res,sample_name,output_dir){
+  write_csv(scds_res,paste0(output_dir,"/",sample_name,"_SCDS_results.csv"))
+}
+
+main <- function(file_path, out_dir){
+    # prepare variables and directories
+    sample_name = str_split_i(file_path,'\\.',1)
+    output_dir = create_out_dir(out_dir,sample_name)
+    #load sample
+    sce = load_sample(paste0(input_dir, file_path))
+    print(dim(sce))
+    # preprocess sample
+    sce = pre_process_sample(sce)
+
+    # Run scds
+    scds_res = run_scds(sce)
+
+    plots = plot_doublets(sce,scds_res)
+
+    pdf(file=paste0(output_dir,"/",sample_name,"_SCDS_tSNE.pdf"))
+    print(plots)
+    dev.off()
+
+    save_results(scds_res,sample_name,output_dir)
+}
+
+```
+
+
+```{r}
+input_dir='../data/cellranger/'
+out_dir='../out/'
+files = list_files(input_dir)
+files = files[files!='BS-22-G18577'] #error
+
+for (file_path in files){
+  print(paste('Processing',file_path))
+  main(file_path = file_path, out_dir = out_dir)
+}
+```
+
+
+# Session Info:
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

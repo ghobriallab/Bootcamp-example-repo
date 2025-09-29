@@ -1,0 +1,68 @@
+services:
+    rstudio:
+        profiles:
+          - rstudio
+        build:
+          context: ./rstudio_container
+          dockerfile: Dockerfile
+        image: rstudio:latest
+        container_name: rstudio
+        volumes:
+          - ../../:/workspace
+        ports:
+            - "8890:8787"
+        environment:
+          - PASSWORD=123
+          - USERID=1011
+          - GROUPID=1012
+        working_dir: /workspace
+    jupyter:
+        image: jupyter:latest
+        profiles:
+          - jupyter
+        build:
+          context: ./jupyter_env
+          dockerfile: Dockerfile
+        container_name: jupyter
+        volumes:
+          - ../../:/workspace
+        user: 'root'
+        ports:
+          - "8888:8888"
+        environment:
+          - ENABLE_JUPYTER_LAB=yes
+          - JUPYTER_TOKEN=123
+          - NB_USER=foster #on VM, see `whoami`
+          - NB_UID=1011 #user id, more important, see `id -u` in VM
+          - NB_GID=1012 #group id `id -g`
+          - CHOWN_HOME=yes
+        working_dir: /workspace
+    jupyter_scvi:
+        image: jupyter:latest
+        profiles:
+          - jupyter
+        build:
+          context: ./jupyter_scvi
+          dockerfile: Dockerfile
+        container_name: scvi
+        volumes:
+          - ../../:/workspace
+        user: 'root'
+        ports:
+          - "8888:8888"
+        environment:
+          - ENABLE_JUPYTER_LAB=yes
+          - JUPYTER_TOKEN=123
+          - NB_USER=foster #on VM, see `whoami`
+          - NB_UID=24797 #user id, more important, see `id -u` in VM
+          - NB_GID=1015 #group id `id -g`
+          - CHOWN_HOME=yes
+        working_dir: /workspace
+        deploy:
+            resources:
+                reservations:
+                    devices:
+                    - driver: nvidia
+                      count: all
+                      capabilities: [gpu]
+        runtime: nvidia  # This ensures GPU access

@@ -1,0 +1,273 @@
+---
+title: "QC plotting"
+author: "Kane Foster"
+date: "Date: `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+    highlight: tango
+---
+
+# FLEX scRNA pilot
+## QC and Doublets plotting
+
+```{r load_data, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(scran))
+suppressPackageStartupMessages(library(scuttle))
+suppressPackageStartupMessages(library(scater))
+suppressPackageStartupMessages(library(SingleCellExperiment))
+suppressPackageStartupMessages(library(zellkonverter))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(BiocParallel))
+multicore=MulticoreParam(workers=16)
+```
+
+```{r}
+theme_set(theme_classic())
+aes_pl = c('_5prime'='skyblue','FLEX'='#ff646c')
+```
+
+
+## Prep
+
+Import h5ad obs
+```{r}
+
+flex = as_tibble(read.csv('../out/single_cell_object/adata_flex_clean.csv'))
+fivep = as_tibble(read.csv('../out/single_cell_object/adata_5prime_clean.csv'))
+
+```
+
+Attach scrublet scores to 5'
+```{r}
+scr = list()
+for (s in fivep$sample_id %>% unique()){
+  scr[[s]] = read_csv(paste0('../out/',s,'/Scrublet/',s,'_Scrublet_results.csv')) %>% rename(Cell='og_barcodes')
+}
+fivep = fivep %>% left_join(bind_rows(scr,.id='sample_id'))
+fivep$Scrublet_score = fivep$doublet_scores
+fivep$Scrublet_doublet = fivep$predicted_doublets
+```
+
+md
+```{r}
+md = read_tsv('../data/sample_md.tsv')
+md %>% head(2)
+```
+
+working data
+```{r}
+flex$Scrublet_doublet = flex$Scrublet_doublet=='True'
+
+dat = flex %>% select(sample_id, n_genes_by_counts, total_counts, Scrublet_score,Scrublet_doublet) %>% 
+  rbind(
+fivep %>% select(sample_id, n_genes_by_counts, total_counts, Scrublet_score,Scrublet_doublet)
+  ) %>% left_join(md)
+
+dat %>% head(2)
+```
+
+## N cells, sequencing, complexity
+
+```{r fig.height=3, fig.width=2.5}
+
+dat %>% group_by(sample_id,mod) %>% tally() %>% 
+  
+  ggplot(aes(mod,n,fill=mod))+
+  geom_boxplot(outliers = F)+geom_jitter(width=0.2,height=0,size=1)+
+  scale_fill_manual(values = aes_pl)+
+  labs(x='Modality',y='N cells')+
+  theme(legend.position = 'none')
+
+dat %>% group_by(sample_id,mod) %>% summarise(total_counts=median(total_counts)) %>% 
+  
+  ggplot(aes(mod,total_counts,fill=mod))+
+  geom_boxplot(outliers = F)+geom_jitter(width=0.2,height=0,size=1)+
+  scale_fill_manual(values = aes_pl)+
+  labs(x='Modality',y='Median UMI counts')+
+  theme(legend.position = 'none')
+
+dat %>% group_by(sample_id,mod) %>% summarise(n_genes_by_counts=median(n_genes_by_counts)) %>% 
+  
+  ggplot(aes(mod,n_genes_by_counts,fill=mod))+
+  geom_boxplot(outliers = F)+geom_jitter(width=0.2,height=0,size=1)+
+  scale_fill_manual(values = aes_pl)+
+  labs(x='Modality',y='Median N unique genes')+
+  theme(legend.position = 'none')
+
+```
+
+```{r fig.height=3, fig.width=3}
+
+dat %>% group_by(pt_id,mod) %>% tally() %>% 
+  pivot_wider(names_from=mod,values_from=n) %>% drop_na() %>% 
+  ggplot(aes(`_5prime`,FLEX))+
+  geom_point()+
+  scale_y_log10()+scale_x_log10()
+
+
+dat %>% group_by(pt_id,mod) %>% summarise(total_counts=median(total_counts)) %>% 
+  pivot_wider(names_from=mod,values_from=total_counts) %>% drop_na() %>% 
+  ggplot(aes(`_5prime`,FLEX))+
+  geom_point()+
+  scale_y_log10()+scale_x_log10()
+
+
+```
+
+
+## % doublets
+
+
+```{r fig.height=3, fig.width=2.5}
+
+dat %>% group_by(pt_id,mod,Scrublet_doublet) %>% 
+  tally() %>% ungroup() %>% 
+  group_by(pt_id,mod) %>% mutate(pct = n/sum(n)*100) %>% 
+  filter(Scrublet_doublet) %>% 
+
+  ggplot(aes(mod,pct,fill=mod))+
+  geom_boxplot(outliers = F)+geom_jitter(width=0.2,height=0,size=1)+
+  scale_fill_manual(values = aes_pl)+
+  labs(x='Modality',y='% doublets')+
+  theme(legend.position = 'none')
+
+dat %>% group_by(pt_id,mod) %>% summarise(Scrublet_score=median(Scrublet_score)) %>% 
+
+  ggplot(aes(mod,Scrublet_score,fill=mod))+
+  geom_boxplot(outliers = F)+geom_jitter(width=0.2,height=0,size=1)+
+  scale_fill_manual(values = aes_pl)+
+  labs(x='Modality',y='Median doublet score')+
+  theme(legend.position = 'none')
+
+```
+
+
+
+```{r fig.height=3, fig.width=3}
+
+dat %>% 
+  group_by(pt_id,mod,Scrublet_doublet) %>% tally() %>% ungroup() %>% 
+  filter(!pt_id %in% c('pt_26','pt_10015')) %>% 
+  group_by(pt_id,mod) %>% mutate(pct=n/sum(n)*100) %>% ungroup() %>% 
+  filter(Scrublet_doublet) %>% 
+  pivot_wider(names_from=mod,values_from=pct,values_fill=1) %>% drop_na() %>% 
+  ggplot(aes(`_5prime`,FLEX))+
+  geom_point()+
+  #scale_y_log10()+scale_x_log10()+annotation_logticks(sides='lb')+
+  labs(x="5'",y='FLEX',title='% doublets')+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

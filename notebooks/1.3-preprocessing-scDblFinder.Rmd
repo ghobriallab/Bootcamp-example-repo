@@ -1,0 +1,169 @@
+---
+title: "scDblFinder"
+author: "Jacopo Umberto Verga"
+date: "Date: `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+    highlight: tango
+---
+
+# FLEX scRNA pilot
+## Doublet identification - scDblFinder
+
+
+I received the pre-processed data, now I am going to run the doublet identification pipeline. Second tool:
+
+scDblFinder:
+
+```{r load_data, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(scran))
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(scuttle))
+suppressPackageStartupMessages(library(scater))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(bluster))
+suppressPackageStartupMessages(library(scDblFinder))
+suppressPackageStartupMessages(library(BiocParallel))
+multicore=MulticoreParam(workers=16)
+```
+
+
+Define functions to run scDblFinder
+
+```{r}
+
+list_files <- function(input_dir){
+    samples <- list.files(input_dir)
+    return(samples)
+    }
+
+create_out_dir <- function(out_dir, sample_name){
+    output_dir <- paste0(out_dir,sample_name,"/scDblFinder/")
+    dir.create(output_dir,recursive = T)
+    return(output_dir)
+    }
+
+load_sample <- function(file_path){
+    dat = Seurat::Read10X_h5(paste0(file_path,'/sample_filtered_feature_bc_matrix.h5'))
+    dat = Seurat::CreateSeuratObject(dat, min.cells = 1, min.features = 1)
+    ## NOTE TO NORMALIZE WITH SCUTTLE I HAVE TO REMOVE ZERO COUNT CELLS!!!!
+    ## gac
+    sce = as.SingleCellExperiment(dat)
+    return(sce)
+    }
+
+pre_process_sample <- function(sce){
+    sce <- logNormCounts(sce, BPPARAM=multicore)
+    dec <- modelGeneVar(sce, BPPARAM=multicore)
+    hvgs <- getTopHVGs(dec, n=2000)
+    set.seed(12345)
+    sce <- runPCA(sce, ncomponents=10, subset_row=hvgs, BPPARAM=multicore)
+    sce <- runTSNE(sce, dimred="PCA", BPPARAM=multicore)
+    output<-list(sce,hvgs)
+    return(output)
+    }
+
+run_computeDoubletDensity <- function(sce, hvgs){
+    scores <- computeDoubletDensity(sce, subset.row=hvgs, BPPARAM=multicore)
+    computeDoubletDensity_res <- data.frame(cbind(colnames(sce),scores))
+    colnames(computeDoubletDensity_res) <- c("Cell","DoubletScore")
+    computeDoubletDensity_res <- computeDoubletDensity_res[match(colnames(sce),computeDoubletDensity_res$Cell),]
+    output = list(computeDoubletDensity_res,scores)
+    return(output)
+    }
+
+run_scDblFinder <- function(sce){
+    sce <- scDblFinder(sce, BPPARAM=multicore)
+    scDblFinder_res <- data.frame(cbind(colnames(sce),sce$scDblFinder.score,sce$scDblFinder.class))
+    colnames(scDblFinder_res) <- c("Cell","scDblFinder.score","scDblFinder.class")
+    scDblFinder_res <- scDblFinder_res[match(colnames(sce),scDblFinder_res$Cell),]
+    return(scDblFinder_res)
+    }
+
+run_findDoubletClusters <- function(sce){
+    clusters <- clusterRows(reducedDim(sce, "PCA"), NNGraphParam())
+    tab <- findDoubletClusters(sce, clusters)
+    tab$Cluster <- rownames(tab)
+    tab <- data.frame(tab)
+    findDoubletClusters_res <- data.frame(cbind(colnames(sce),clusters))
+    colnames(findDoubletClusters_res) <- c("Cell","Cluster")
+    findDoubletClusters_res <- merge(findDoubletClusters_res,tab, by="Cluster")
+    findDoubletClusters_res$Doublet <- ifelse(findDoubletClusters_res$p.value > 0.05,1,0)
+    findDoubletClusters_res <- findDoubletClusters_res[match(colnames(sce),findDoubletClusters_res$Cell),]
+    output = list(findDoubletClusters_res, clusters)
+    return(output)
+    }
+
+plot_doublets <- function(sce,scDblFinder_res,findDoubletClusters_res,scores, clusters, output_dir,sample_name){
+    p1=plotTSNE(sce, colour_by=I(factor(findDoubletClusters_res$Doublet)), text_by=I(clusters)) + ggtitle("findDoubletClusters") + theme(plot.title = element_text(hjust = 0.5))
+    p2=plotTSNE(sce, colour_by=I(as.numeric(scDblFinder_res$scDblFinder.score)), text_by=I(clusters)) + ggtitle('scDblFinder Score') + theme(plot.title = element_text(hjust = 0.5))
+    p3=plotTSNE(sce, colour_by=I(scDblFinder_res$scDblFinder.class), text_by=I(clusters)) + ggtitle('scDblFinder Class') + theme(plot.title = element_text(hjust = 0.5))
+    p4=plotTSNE(sce, colour_by=I(log1p(scores)), text_by=I(clusters)) + ggtitle('computeDoubletDensity Scores') + theme(plot.title = element_text(hjust = 0.5))
+    output=list(p1,p2,p3,p4)
+    return(output)
+    }
+
+save_results <- function(computeDoubletDensity_res, scDblFinder_res,findDoubletClusters_res,output_dir,sample_name){
+  write_csv(computeDoubletDensity_res,paste0(output_dir,"/",sample_name,"_computeDoubletDensity_results.csv"))
+  write_csv(scDblFinder_res,paste0(output_dir,"/",sample_name,"_scDblFinder_results.csv"))
+  write_csv(findDoubletClusters_res,paste0(output_dir,"/",sample_name,"_findDoubletClusters_results.csv"))
+}
+
+main <- function(file_path, out_dir){
+    # prepare variables and directories
+    sample_name = str_split_i(file_path,'\\.',1)
+    output_dir = create_out_dir(out_dir,sample_name)
+    #load sample
+    sce = load_sample(paste0(input_dir, file_path))
+    # preprocesss sample
+    pp_list = pre_process_sample(sce)
+    sce = pp_list[[1]]
+    hvgs = pp_list[[2]]
+    # Run scDblFider (density, scDblFinder and clusters)
+    doublet_res = run_computeDoubletDensity(sce, hvgs)
+    scores = doublet_res[[2]]
+    computeDoubletDensity_res = doublet_res[[1]]
+    
+    scDblFinder_res = run_scDblFinder(sce)
+    
+    doublet_clusters=run_findDoubletClusters(sce)
+    clusters = doublet_clusters[[2]]
+    findDoubletClusters_res= doublet_clusters[[1]]
+    
+    plots = plot_doublets(sce,scDblFinder_res,findDoubletClusters_res,scores, clusters, output_dir,sample_name)
+
+    pdf(file=paste0(output_dir,"/",sample_name,"_scDblFinder_tSNE.pdf"))
+    print(plots)
+    dev.off()
+    
+    save_results(computeDoubletDensity_res, scDblFinder_res,findDoubletClusters_res,output_dir,sample_name)
+}
+```
+
+
+```{r}
+input_dir='../data/cellranger/'
+out_dir='../out/'
+files = list_files(input_dir)
+
+for (file_path in files){
+  print(paste('Processing',file_path))
+  main(file_path = file_path, out_dir = out_dir)
+}
+
+```
+
+
+# Session Info:
+
+```{r}
+sessionInfo()
+```
+
+
+
